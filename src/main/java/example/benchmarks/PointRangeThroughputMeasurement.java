@@ -7,7 +7,6 @@ import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
-import org.apache.lucene.search.TopScoreDocCollectorManager;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 
@@ -18,6 +17,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
@@ -105,9 +105,8 @@ public class PointRangeThroughputMeasurement {
                 if (pool.get() > 0) {
                     int val = pool.decrementAndGet();
                     if (val >= 0) {
-                        TopScoreDocCollectorManager manager = new TopScoreDocCollectorManager(10, Integer.MAX_VALUE);
                         try {
-                            searcher.search(queries[pos++], manager);
+                            searcher.search(queries[pos++], 10);
                         } catch (IOException e) {
                             System.err.println(e.getMessage());
                         }
@@ -165,7 +164,8 @@ public class PointRangeThroughputMeasurement {
                     searcher.search(queries[i], 10);
                 }
                 int[] finalQps = new int[1];
-                try (ExecutorService executor = Executors.newFixedThreadPool(workerCount)) {
+                ExecutorService executor = Executors.newFixedThreadPool(workerCount);
+                try {
                     AtomicInteger pool = new AtomicInteger(0);
                     AtomicBoolean stop = new AtomicBoolean(false);
                     int queryOffset = queries.length / workerCount;
@@ -173,11 +173,18 @@ public class PointRangeThroughputMeasurement {
                         executor.execute(new Worker(queries, searcher, queryOffset * i, pool, stop));
                     }
                     CountDownLatch stopLatch = new CountDownLatch(1);
-                    try (ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1)) {
+                    ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+                    try{
                         scheduler.scheduleAtFixedRate(new PoolFiller(finalQps, pool, stopLatch, 5000, 500), 0, 1, TimeUnit.SECONDS);
                         stopLatch.await();
                         stop.set(true); // Terminate the workers
                     }
+                    finally {
+                        scheduler.shutdown();
+                    }
+                }
+                finally {
+                    executor.shutdown();
                 }
                 System.out.println("Final QPS: " + finalQps[0]);
             }
